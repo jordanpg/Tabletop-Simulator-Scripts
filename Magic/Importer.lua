@@ -1,7 +1,7 @@
 --By Amuzet
 mod_name,version='Card Importer',1.961
 self.setName('[854FD9]'..mod_name..' [49D54F]'..version)
-author,WorkshopID,GITURL='76561198045776458','https://steamcommunity.com/sharedfiles/filedetails/?id=1838051922','https://raw.githubusercontent.com/Amuzet/Tabletop-Simulator-Scripts/master/Magic/Importer.lua'
+author,WorkshopID,GITURL='76561198045776458','https://steamcommunity.com/sharedfiles/filedetails/?id=1838051922','https://raw.githubusercontent.com/jordanpg/Tabletop-Simulator-Scripts/master/Magic/Importer.lua'
 coauthor='76561197968157267'--PIE
 lang='en'
 --[[Classes]]
@@ -626,7 +626,7 @@ Booster.KAMIGAWA=function(qTbl)--wubrgCCCCCCUUURN
   return p end
 Booster.MIRRODIN=function(qTbl)
   local p=Booster('(s:mrd+s:dst+s:5dn+s:som+s:mbs+s:nph)')
-  
+
   return p end
 Booster.ZENDIKAR=function(qTbl)
   local p=Booster('(s:zen+s:wwk+s:roe+s:bfz+s:ogw+s:znr)')
@@ -650,7 +650,7 @@ Booster.HELP=function(qTbl)
 [b]Custom Masters Packs[/b] [The following list are Double Master like packs made by Amuzet and friends]
  > ]]..s)
   return Booster('plist')end
-  
+
 function spawnPack(qTbl,pack)
   qTbl.deck=#pack
   qTbl.mode='Deck'
