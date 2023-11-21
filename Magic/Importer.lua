@@ -384,6 +384,9 @@ function setCard(wr, qTbl, originalData)
             -- the above bit is probably supposed to be Card(originalData,qTbl) to spawn the original foreign card instead of the error json?
             -- replaced with a fuzzy search on the card name instead --> seems to find/get the english version after all
         elseif originalData and originalData.name then
+            if json.object == 'error' then
+                Player[qTbl.color].broadcast("Scryfall couldn't find " .. originalData.name .. " (" .. originalData.set:upper() .. ") " .. originalData.cn:upper() .. (originalData.foil and " *F*" or ""), {1, 0, 0})
+            end
             WebRequest.get('https://api.scryfall.com/cards/named?fuzzy=' .. originalData.name:gsub('%W', ''),
                 function(a)
                     setCard(a, qTbl)
@@ -711,13 +714,15 @@ local DeckSites = {
                 local cardSnip = wr.text:sub(startInd, endInd)
                 local cardJson = JSON.decode(cardSnip)
                 if cardJson.printingData then
-                    print(cardJson.printingData)
                     for i, printingDat in ipairs(cardJson.printingData) do
                         card = {
                             quantity = printingDat.quantity,
                             boardType = cardJson.boardType,
                             scryfall_id = printingDat.card.scryfall_id,
-                            name = printingDat.card.name:gsub('(\\u....)', '')
+                            name = printingDat.card.name:gsub('(\\u....)', ''),
+                            set = printingDat.card.set,
+                            cn = printingDat.card.cn,
+                            foil = printingDat.card.foil
                         }
                         table.insert(cards, card)
                     end
@@ -726,7 +731,10 @@ local DeckSites = {
                         quantity = cardJson.quantity,
                         boardType = cardJson.boardType,
                         scryfall_id = cardJson.card.scryfall_id,
-                        name = cardJson.card.name:gsub('(\\u....)', '')
+                        name = cardJson.card.name:gsub('(\\u....)', ''),
+                        set = cardJson.card.set,
+                        cn = cardJson.card.cn,
+                        foil = cardJson.card.foil
                     }
                     table.insert(cards, card)
                 end
@@ -742,7 +750,7 @@ local DeckSites = {
                         qTbl.deck = qTbl.deck + 1
                         Wait.time(function()
                             WebRequest.get('https://api.scryfall.com/cards/' .. card.scryfall_id, function(c)
-                                setCard(c, qTbl)
+                                setCard(c, qTbl, card)
                             end)
                         end, qTbl.deck * Tick * 2)
                     end
