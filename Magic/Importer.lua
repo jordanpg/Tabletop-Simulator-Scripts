@@ -1,5 +1,5 @@
 --By Amuzet
-mod_name,version='Card Importer',1.963
+mod_name,version='Card Importer',1.969
 self.setName('[854FD9]'..mod_name..' [49D54F]'..version)
 author,WorkshopID,GITURL='76561198045776458','https://steamcommunity.com/sharedfiles/filedetails/?id=1838051922','https://raw.githubusercontent.com/Amuzet/Tabletop-Simulator-Scripts/master/Magic/Importer.lua'
 coauthor='76561197968157267'--PIE
@@ -57,18 +57,43 @@ local Card=setmetatable({n=1,image=false},
       if c.image_status~='highres_scan' then
         imgSuffix='?'..tostring(os.date('%x')):gsub('/', '')
       end
-      --Oracle text Handling for Split then DFC then Normal
-      if c.card_faces and c.image_uris then
+
+			local orientation={false}--Tabletop Card Sideways
+			--Oracle text Handling for Split then DFC then Normal
+      if c.card_faces and c.image_uris then--Adventure/Split
+				local instantSorcery=0
         for i,f in ipairs(c.card_faces)do
-          f.name=f.name:gsub('"','')..'\n'..f.type_line..'\n'..c.cmc..'CMC'
+					f.name=f.name:gsub('"','')..'\n'..f.type_line..'\n'..c.cmc..'CMC'
           if i==1 then c.name=f.name end
-          c.oracle=c.oracle..f.name..'\n'..setOracle(f)..(i==#c.card_faces and''or'\n')end
-        elseif c.card_faces then local f=c.card_faces[1]
-        c.name=f.name:gsub('"','')..'\n'..f.type_line..'\n'..c.cmc..'CMC DFC'
-        c.oracle=setOracle(f)else
+          c.oracle=c.oracle..f.name..'\n'..setOracle(f)..(i==#c.card_faces and''or'\n')
+					
+					--Count nonPermanent text boxes, exclude Aftermath
+					if not c.oracle:find('Aftermath')and
+					('InstantSorcery'):find(f.type_line)then
+						instantSorcery=1+instantSorcery end
+				end
+				if instantSorcery==2 then--Split/Fuse
+					orientation[1]=true end
+
+			elseif c.card_faces then--DFC
+				local f=c.card_faces[1]
+				local cmc=c.cmc or f.cmc or 0
+        c.name=f.name:gsub('"','')..'\n'..f.type_line..'\n'..cmc..'CMC DFC'
+        c.oracle=setOracle(f)
+				for i,face in ipairs(c.card_faces)do
+					if face.type_line:find('Battle')then
+						orientation[i]=true
+					else
+						orientation[i]=false
+					end
+					print(i..' '..tostring(orientation[i]))
+				end
+			else--NORMAL
         c.name=c.name:gsub('"','')..'\n'..c.type_line..'\n'..c.cmc..'CMC'
         c.oracle=setOracle(c)
+				if('planar'):find(c.layout)then orientation[1]=true end
       end
+
       local backDat=nil
       --Image Handling
       if qTbl.deck and qTbl.image and qTbl.image[n] then
@@ -81,9 +106,11 @@ local Card=setmetatable({n=1,image=false},
         if t.image then faceAddress,backAddress=t.image,t.image end
         c.face=faceAddress
         local f=c.card_faces[2]
-        local name=f.name:gsub('"','')..'\n'..f.type_line..'\n'..c.cmc..'CMC DFC'
+				local cmc=c.cmc or f.cmc or 0
+        local name=f.name:gsub('"','')..'\n'..f.type_line..'\n'..cmc..'CMC DFC'
         local oracle=setOracle(f)
         local b=n
+				
         if qTbl.deck then b=qTbl.deck+n end
         backDat={
           Transform={posX=0,posY=0,posZ=0,rotX=0,rotY=0,rotZ=0,scaleX=1,scaleY=1,scaleZ=1},
@@ -92,7 +119,11 @@ local Card=setmetatable({n=1,image=false},
           Description=oracle,
           Memo=c.oracle_id,
           CardID=b*100,
-          CustomDeck={[b]={FaceURL=backAddress,BackURL=c.back,NumWidth=1,NumHeight=1,Type=0,BackIsHidden=true,UniqueBack=false}},
+          CustomDeck={[b]={
+							FaceURL=backAddress,
+							BackURL=c.back,
+							NumWidth=1,NumHeight=1,Type=0,
+							BackIsHidden=true,UniqueBack=false}},
         }
       elseif t.image then --Custom Image
         c.face=t.image
@@ -109,11 +140,20 @@ local Card=setmetatable({n=1,image=false},
         Description=c.oracle,
         Memo=c.oracle_id,
         CardID=n*100,
-        CustomDeck={[n]={FaceURL=c.face,BackURL=c.back,NumWidth=1,NumHeight=1,Type=0,BackIsHidden=true,UniqueBack=false}},
+        CustomDeck={[n]={
+						FaceURL=c.face,
+						BackURL=c.back,
+						NumWidth=1,NumHeight=1,Type=0,
+						BackIsHidden=true,UniqueBack=false}},
       }
-      if backDat then
-        cardDat.States={[2]=backDat}    -- pieHere, make backface be state#2
-      end
+			
+      if backDat then --backface is state#2
+        cardDat.States={[2]=backDat}end
+			
+			local landscapeView={0,180,270}
+			--AltView
+			if orientation[1]then cardDat.AltLookAngle=landscapeView end
+			if orientation[2]then cardDat.States[2].AltLookAngle=landscapeView end
 
       -- Spawn
       if not(qTbl.deck) or qTbl.deck==1 then        --Spawn solo card
@@ -179,8 +219,40 @@ function setOracle(c)local n='\n[b]'
 function setCard(wr,qTbl,originalData)
   if wr.text then
     local json=JSON.decode(wr.text)
+		
     if json.object=='card' then
-      if json.lang==lang then
+			
+			--Fancy Art Series
+			if originalData and originalData.layout=='art_series'then
+				for k in ('mana_cost type_line oracle_text colors power toughness loyalty'):gmatch('%S+')do
+					--if json.card_faces and json.card_faces then
+						for i=1,2 do
+							if json.card_faces and json.card_faces[i][k]then
+								originalData.card_faces[i][k]=json.card_faces[i][k]
+							elseif json[k]then
+								originalData.card_faces[i][k]=json[k]
+				end end end
+				for k in ('cmc type_line color_identity layout'):gmatch('%S+')do
+					if json[k]then
+						originalData[k]=json[k]
+				end end
+				if json.image_uris then
+					originalData.card_faces[2].image_uris = json.image_uris
+				else
+					originalData.card_faces[2].image_uris = json.card_faces[2].image_uris
+				end
+
+			elseif json.layout=='art_series'then
+				WebRequrest.get('http://api.scryfall.com/cards/named?fuzzy='..json.card_faces[1].name,function(request)
+          local locale_json = JSON.decode(request.text)
+          if locale_json.object=='error' then
+            Card(json,qTbl)
+          else
+            setCard(request, qTbl, json)
+          end
+        end)
+
+      elseif json.lang==lang then
         Card(json, qTbl)
       elseif json.lang=='en' then
         WebRequest.get('https://api.scryfall.com/cards/'..json.set..'/'..json.collector_number..'/'..lang,function(request)
@@ -188,7 +260,7 @@ function setCard(wr,qTbl,originalData)
           if locale_json.object=='error' then
             Card(json,qTbl)
           else
-            setCard(request, qTbl, originalData)
+            setCard(request, qTbl, json)
           end
         end)
       else
@@ -348,11 +420,44 @@ function spawnDeck(wr,qTbl)
     qTbl.deck=#deck
 
     for i,url in ipairs(deck) do
-      Wait.time(function()
-                  WebRequest.get(url,function(c) setCard(c,qTbl) end)
-                end,i*Tick)
+      Wait.time(function()WebRequest.get(url,function(c) setCard(c,qTbl) end)end,i*Tick)
     end
   end
+end
+
+function convertQuotedValues(str)
+	local a,b= str:gsub('%b""',function(g)return g:gsub(',',''):gsub('"','')end)
+	return a
+end
+
+function spawnDeckFromScryfall(wr,qTbl)
+	local side,deck,list='',{},wr.text
+	
+	for line in list:gmatch('[^\r\n]+')do
+		if ('SideboardMaybeboard'):find(line:match('%w+'))then
+			side=side..convertQuotedValues(line):match('%d+,[^,]+'):gsub(',',' ')..'\n'
+		elseif line:find(',(%d+),')then
+			for i=1,line:match(',(%d+),')do
+				table.insert(deck, line:match('https://scryfall.com/card/([^/]+/[^/]+)') )
+			end
+		end
+	end
+	
+  if side~=''then
+    Player[qTbl.color].broadcast('Sideboard Found and pasted into Notebook\n"Scryfall deck" to spawn most recent Notebook Tab')
+    uNotebook(qTbl.url,side)
+  end
+	
+  qTbl.deck=#deck
+  for i,u in ipairs(deck)do
+    Wait.time(function()WebRequest.get('https://api.scryfall.com/cards/'..u,function(c)
+
+					local t=JSON.decode(c.text)
+					if t.object~='card'then
+						WebRequest.get('https://api.scryfall.com/cards/named?fuzzy=blankcard',function(c)setCard(c,qTbl)end)
+					else setCard(c,qTbl) end end)end,i*Tick)
+  end
+	
 end
 
 setCSV=4
@@ -401,7 +506,7 @@ function spawnCSV(wr,qTbl)
                                      setCard(c,qTbl)
                                    end
                 end)
-    end,i*Tick*2)
+    end,i*Tick)
   end
 end
 
@@ -462,7 +567,7 @@ local DeckSites={
     wr.text=r.text:match('%Wbody%W(.+)%W%Wbody%W'):gsub('<br.?>','\n')
     spawnDeck(wr,qTbl)end end,
 --scryfall=function(a)return'https://api.scryfall.com'..a:match('(/decks/.*)')..'/export/text',spawnDeck end,
-  scryfall=function(a)setCSV=7 return'https://api.scryfall.com'..a:match('(/decks/.*)')..'/export/csv',spawnCSV end,
+  scryfall=function(a)setCSV=7 return'https://api.scryfall.com'..a:match('(/decks/.*)')..'/export/csv',spawnDeckFromScryfall end,
   --https://tappedout.net/users/i_am_moonman/lists/15-11-20-temp-cube/?cat=type&sort=&fmt=csv
   tappedout=function(a)if a:find('/lists/')then setCSV=3 else setCSV=4 end
     return a:gsub('.cb=%d+','')..'?fmt=csv',spawnCSV end,
@@ -471,7 +576,8 @@ local DeckSites={
     if a:find('/archetype/')then return a,function(wr,qTbl)Player[qTbl.color].broadcast('This is an Archtype!\nPlease spawn a User made Deck.',{0.9,0.1,0.1})endLoop()end
     elseif a:find('/deck/')then return a:gsub('/deck/','/deck/download/'):gsub('#.+',''),spawnDeck
     else return a,function(wr,qTbl)Player[qTbl.color].broadcast('This MTGgoldfish url is malformated.\nOr unsupported contact Amuzet.')end end end,
-  archidekt=function(a)return 'https://archidekt.com/api/decks/'..a:match('/(%d+)')..'/small/?format=json',function(wr,qTbl)
+
+	archidekt=function(a)return 'https://archidekt.com/api/decks/'..a:match('/(%d+)')..'/small/?format=json',function(wr,qTbl)
     qTbl.deck=0
     local json=wr.text
     json=JSON.decode(json)
@@ -484,6 +590,7 @@ local DeckSites={
             function(c)setCard(c,qTbl)end)end,qTbl.deck*Tick*2)end end
     if board~=''then Player[qTbl.color].broadcast(json.name..' Sideboard and Maybeboard in notebook.\nType "Scryfall deck" to spawn it now.')
     uNotebook(json.name,board)end end end,
+
   cubecobra=function(a)return a:gsub('list','download/csv')..'?showother=false',function(wr,qTbl)
     local cube,list={},wr.text:gsub('[^\r\n]+','',1)
     if not qTbl.image or type(qTbl.image)~='table'then qTbl.image={}end
@@ -491,42 +598,21 @@ local DeckSites={
     for line in list:gmatch('([^\r\n]+)')do
       local tbl,n,l={},0,line:gsub('.-"','',2)
       --Grab all non-empty strings surrounded by quotes, will include set and cn
-      --"Lupine Prototype",2,"Artifact Creature - Wolf Construct",,"emn","197",rare,c,Owned,Non-foil,false,,,"","",61494
-      --"Lupine Prototype","Artifact Creature - Wolf Construct","emn","197"
-      for obj in line:gmatch('"([^"]+)"') do
-          --log(obj)
+      for obj in line:gmatch('([^"]+)') do
           table.insert(tbl,obj)
       end
-      --for csv in l:gmatch('"([^,"]+)"')do log('csv:') log(csv)
-        --if csv:len()==1 then table.insert(tbl,false)
-        --else table.insert(tbl,csv:gsub('"',''))end end
-
-      --if tbl[12]:find('http')then qTbl.image[n]=tbl[12]:match('"([^"]+)')end
       --Only include cards that aren't on the maybeboard
       if line:match(',false,') then
-        local b='https://api.scryfall.com/cards/'..tbl[3]..'/'..tbl[4]
-        --Catch custom images
-        --This could break so fucking hard if someone uses http as a tag ffs
-        --Doesn't catch image backs, so if someone's making a DFC they can fuck themselves.
+        local b='https://api.scryfall.com/cards/'..tbl[5]..'/'..tbl[7]
         c=c+1
-        if tbl[5]:match('http') then --Use c to count which card should have its image replaced
-            log('c:')
-            log(c)
-            log(tbl[5])
-            qTbl.image[c]=tbl[5] --This might be messing it up, if qTbl is static across imports.
-            --If it cares about the nth card spawned, then c will always point to the nth card overall
-            --instead of from this import.
-            --b = tbl[5]
+        if tbl[9]:match('http') then
+            qTbl.image[c]=tbl[9]
         end
-        table.insert(cube,b)
+        Wait.time(function() WebRequest.get(b,function(c)setCard(c,qTbl)end) end,c*Tick)
       end
     end
-    qTbl.deck=#cube
-    for i,url in ipairs(cube)do
-      Wait.time(function()
-          WebRequest.get(url,function(c)
-              setCard(c,qTbl)end)end,i*Tick*2)end
-    end end}
+    qTbl.deck = c
+  end end}
 local apiRnd='http://api.scryfall.com/cards/random?q='
 local apiSet=apiRnd..'is:booster+s:'
 function rarity(m,r,u)
@@ -540,7 +626,7 @@ local Booster=setmetatable({
     war=function(p)return typeCo(p,'t:planeswalker')end,
     znr=function(p)return typeCo(p,'t:land+is:mdfc')end,
     tsp='tsb',mb1='fmb1',mh2='h1r',stx='sta',--Garenteed
-    bfz='exp',ogw='exp',kld='mps',aer='mps',akh='mp2',hou='mp2'--Masterpiece
+    bfz='exp',ogw='exp',kld='mps',aer='mps',akh='mp2',hou='mp2',bro='brr'--Masterpiece
   },{__call=function(t,set,n)
     local pack,u={},apiSet..set..'+'
     u=u:gsub('%+s:%(','+(')
@@ -564,14 +650,15 @@ Booster['unf']=function(p)local j=rSlot(p,'unf','+-t:Attraction','+t:Attraction'
 Booster['ust']=function(p)local j=rSlot(p,'ust','+-t:Contraption','+t:Contraption')
   table.insert(j,j[6])return j end
 for s in('clb cmr'):gmatch('%S+')do
-  Booster[s]=function(p)--wubrgCCCCCCCUUUURLLF
-    local u=apiSet..s..'+t:legendary+'
+  Booster[s]=function(p)--wubrg CCCCC CCUUU URLLF
+    local u=apiSet..s..'+t:legendary+'--L
     p[#p]=p[#p]..'+-t:legendary'
     table.insert(p,12,p[12])
     table.insert(p,6,p[6])
     table.insert(p,u..rarity(8,1))
     table.insert(p,u..rarity(8,1))
     table.insert(p,apiSet..s..'+is:etched')
+    printToAll('20 Card Booster, draft two each pick')
     return p end end
 for s in('2xm 2x2'):gmatch('%S+')do
   Booster[s]=function(p)p[11]=p[12];table.insert(p,apiSet..s..'+'..rarity(8,1))return p end end
@@ -586,7 +673,24 @@ for s in('rav gpt dis rtr gtc dgm grn rna'):gmatch('%S+')do
   Booster[s]=function(p)return rSlot(p,s,'+-t:land','+t:land+-t:basic')end end
 for s in('ice all csp mh1 khm'):gmatch('%S+')do
   Booster[s]=function(p)p[6]=apiSet..s..'+t:basic+t:snow'return p end end
+--wubrg CCCCC CUUUR LLYUF
+Booster['cmm']=function(p)
+	for i=12,15 do p[i]=p[i]..'+-t:legendary'end
+	local sL=apiSet..'cmm+t:legendary'
+	--2 Legendaries
+	table.insert(p,sL)
+	table.insert(p,sL)
+	--1 Rare+ Legendary
+	table.insert(p,sL..'+'..rarity(8,1))
+	--1 more Uncommon
+	table.insert(p,apiSet..'cmm+r:uncommon+-t:legendary')
+	--1 any Foil
+	table.insert(p,apiSet..'cmm+'..rarity())
+	--20 Total
+	return p end
+
 --Custom Booster Packs
+Booster.CMMDRAFT=function(qTbl)return Booster('cmm',true)end
 Booster.ADAMS=function(qTbl)
   local pack,u={},'http://api.scryfall.com/cards/random?q=f:standard+'
   for c in ('wubrg'):gmatch('.')do
@@ -623,6 +727,34 @@ Booster.MANAMARKET=function(qTbl)
       pack[i]=u..'(border:borderless+or+frame:showcase+or+frame:extendedart+or+set:plist+or+set:sta)'
     end end
   return pack end
+Booster.PLANAR=function(qTbl)
+	--((t:plane or t:phenomenon) o:planeswalk) or 
+	local u='http://api.scryfall.com/cards/random?q='
+	local additional="+or+o:'planar+di'+or+o:'will+of+the+planeswalker'"
+	
+	local pack={
+	u..'frame:2015+c=w',
+	u..'frame:2015+c=u',
+	u..'frame:2015+c=b',
+	u..'frame:2015+c=r',
+	u..'frame:2015+c=g',
+	u..'frame:2015+c=c',
+	u..'frame:2015+c>1',
+	u..'frame:2015+c<2+id>1',
+	u..'frame:2015+-is:permanent',
+	u..'frame:2015+-t:creature'..additional,
+	--u..'frame:2015+is:french_vanilla',
+	--u..'is:vanilla',
+	u..'t:planeswalker',
+	u..'(t:plane+or+t:phenomenon)'..additional,
+	u..'((t:plane+or+t:phenomenon)+o:planeswalk)',
+	u..'((t:plane+or+t:phenomenon)+-o:planeswalk)',
+	u..'(t:plane+or+t:phenomenon)',
+	u..'frame:2015'
+	}
+	
+	return pack end
+--PLANES
 Booster.CONSPIRACY=function(qTbl)--wubrgCCCCCTUUURT
   local p=Booster('(s:cns+or+s:cn2)')
   local z=p[#p]:gsub('r:%S+',rarity(9,6,3))
@@ -697,9 +829,15 @@ function spawnPack(qTbl,pack)
   qTbl.deck=#pack
   qTbl.mode='Deck'
   log(pack)
+	--TODO: prevent dups, divert to a seperate function before setCard()
   for i,u in pairs(pack)do
     Wait.time(function()WebRequest.get(u,function(wr)
+					if wr.text:find('object:"error"')then log(u)end
+					--Divert here
           setCard(wr,qTbl)end)end,i*Tick)end
+	--Store the returned pack check for dups
+	--Rerun pack if dups 3 of same or more than a pair
+	--Exclude Multiverse ID
 end
 --[[Importer Data Structure]]
 Importer=setmetatable({
@@ -851,7 +989,8 @@ Importer=setmetatable({
     qTbl.url='Booster '..qTbl.name
     if Booster[qTbl.name:upper()]then
       spawnPack(qTbl,Booster[qTbl.name:upper()](qTbl))
-    elseif #qTbl.name<5 then
+
+		elseif #qTbl.name<5 then
       if qTbl.name==''then qTbl.name='ori'end
       WebRequest.get('https://api.scryfall.com/sets/'..qTbl.name,function(w)
         local j=JSON.decode(w.text)
@@ -859,7 +998,8 @@ Importer=setmetatable({
           qTbl.url='Booster '..j.name
           spawnPack(qTbl,Booster(qTbl.name))
       else Player[qTbl.color].broadcast(j.details,{1,0,0})endLoop()end end)
-    elseif qTbl.name:find('%W')then
+
+		elseif qTbl.name:find('%W')then
       Player[qTbl.color].broadcast('Attempting custom Booster:\n '..qTbl.name)
       if qTbl.name:find('^%(')then else
         qTbl.name='('..qTbl.name..')'end
@@ -921,6 +1061,13 @@ Importer=setmetatable({
       spawnDeck({text=d.body,url='Notebook '..d.title..d.color},qTbl)
     end return false end,
 
+  Rawdeck=function(qTbl)
+    if qTbl.target then
+      local dec=qTbl.target.getDescription()
+      
+      spawnDeck({text=dec,url='Description '..qTbl.target.getName()},qTbl)
+    end end,
+
     },{
   __call=function(t,qTbl)
     if qTbl then
@@ -957,7 +1104,7 @@ local Usage=[[    [b]%s
 [-][-][0077ff]Scryfall[/b] [i]cardname[/i]  [-][Spawns that card]
 [b][0077ff]Scryfall[/b] [i]URL cardname[/i]  [-][Spawns [i]cardname[/i] with [i]URL[/i] as it face]
 [b][0077ff]Scryfall[/b] [i]URL[/i]  [-][Spawn that deck list or Image]
-[b]Supported:[/b] [i]archidekt cubetutor cubecobra deckstats deckbox moxfield mtggoldfish scryfall tappedout pastebin[/i]
+[b]Supported:[/b] [i]archidekt cubecobra deckstats deckbox moxfield mtggoldfish scryfall tappedout pastebin[/i]
 [b][0077ff]Scryfall help[/b] [-][Displays all possible commands]
 
 [b][ff7700]deck[/b] [-][Spawn deck from newest Notebook tab]
@@ -1023,27 +1170,20 @@ function onLoad(data)
   self.setDescription(u:gsub('[^\n]*\n','',1):gsub('%]  %[',']\n['))
   printToAll(u,{0.9,0.9,0.9})
   onChat('Scryfall clear back')end
-
-local SMG,SMC='[b]Scryfall: [/b]',{0.5,1,0.8}
-function onPlayerConnect(player)
-  if player.steam_id==author then
-    printToAll(SMG..'Welcome '..player.steam_name..', creator of me. The Card Importer!',SMC)
-  elseif player.steam_id==coauthor then
-    printToAll(SMG..'Praise be to '..player.steam_name..'! ',SMC)
-  end
-end
-function onPlayerDisconnect(player)
-  if player.steam_id==author then
-    printToAll(SMG..'Goodbye '..player.steam_name..', take care of yur self buddy-o-pal!',SMC)
-  elseif player.steam_id==coauthor then
-    printToAll(SMG..'𝜋 doesn\'t terminate, but '..player.steam_name..' does.',SMC)
-  end
-end
 function onDestroy()
   for _,o in pairs(textItems) do
     if o~=nil then o.destruct() end
-  end
-end
+end end
+
+local SMG,SMC='[b]Scryfall: [/b]',{0.5,1,0.8}
+function AP(p,s)printToAll(SMG..s:format(p.steam_name),SMC)end
+function onPlayerConnect(p)
+      if p.steam_id==author   then AP('Welcome %s, creator of me. The Card Importer!')
+  elseif p.steam_id==coauthor then AP('Praise be to %s!')end end
+function onPlayerDisconnect(p)
+      if p.steam_id==author   then AP('Goodbye %s, take care of yur self buddy-o-pal!')
+  elseif p.steam_id==coauthor then AP('𝜋 doesn\'t terminate, but %s does.')end end
+
 local chatToggle=false
 function onChat(msg,p)
   if msg:find('!?[Ss]cryfall ')then
@@ -1061,8 +1201,25 @@ function onChat(msg,p)
       printToAll(SMG..'Respawning Importer!',SMC)
       self.reload()
     elseif a=='clear back'then
-      self.script_state='{"76561198015252567":"https://static.wikia.nocookie.net/mtgsalvation_gamepedia/images/5/5c/Cardback_reimagined.png","76561198237455552":"https://i.imgur.com/FhwK9CX.jpg","76561198041801580":"https://earthsky.org/upl/2015/01/pillars-of-creation-2151.jpg","76561198052971595":"http://cloud-3.steamusercontent.com/ugc/1653343413892121432/2F5D3759EEB5109D019E2C318819DEF399CD69F9/","76561198053151808":"http://cloud-3.steamusercontent.com/ugc/1289668517476690629/0D8EB10F5D7351435C31352F013538B4701668D5/","76561197984192849":"https://i.imgur.com/JygQFRA.png","76561197975480678":"http://cloud-3.steamusercontent.com/ugc/772861785996967901/6E85CE1D18660E60849EF5CEE08E818F7400A63D/","76561198000043097":"https://i.imgur.com/rfQsgTL.png","76561198025014348":"https://i.imgur.com/pPnIKhy.png","76561198045241564":"http://i.imgur.com/P7qYTcI.png","76561198045776458":"https://cdnb.artstation.com/p/assets/images/images/009/160/199/medium/gui-ramalho-air-compass.jpg","76561198069287630":"http://i.imgur.com/OCOGzLH.jpg","76561198005479600":"https://images-na.ssl-images-amazon.com/images/I/61AGZ37D7eL._SL1039_.jpg","76561198042114416":"https://gamepedia.cursecdn.com/mtgsalvation_gamepedia/f/f8/Magic_card_back.jpg","a":"Dummy"}'
-      Back=TBL.new('https://i.stack.imgur.com/787gj.png',JSON.decode(self.script_state))
+      self.script_state=string.gsub([[{
+"76561198015252567":"https://static.wikia.nocookie.net/mtgsalvation_gamepedia/images/5/5c/Cardback_reimagined.png",
+"76561198237455552":"https://i.imgur.com/FhwK9CX.jpg",
+"76561198041801580":"https://earthsky.org/upl/2015/01/pillars-of-creation-2151.jpg",
+"76561198052971595":"http://cloud-3.steamusercontent.com/ugc/1653343413892121432/2F5D3759EEB5109D019E2C318819DEF399CD69F9/",
+"76561198053151808":"http://cloud-3.steamusercontent.com/ugc/1289668517476690629/0D8EB10F5D7351435C31352F013538B4701668D5/",
+"76561197984192849":"https://i.imgur.com/JygQFRA.png",
+"76561197975480678":"http://cloud-3.steamusercontent.com/ugc/772861785996967901/6E85CE1D18660E60849EF5CEE08E818F7400A63D/",
+"76561198000043097":"https://i.imgur.com/rfQsgTL.png",
+"76561198025014348":"https://i.imgur.com/pPnIKhy.png",
+"76561198045241564":"http://i.imgur.com/P7qYTcI.png",
+"76561198045776458":"https://cdnb.artstation.com/p/assets/images/images/009/160/199/medium/gui-ramalho-air-compass.jpg",
+"76561198069287630":"http://i.imgur.com/OCOGzLH.jpg",
+"76561198005479600":"https://images-na.ssl-images-amazon.com/images/I/61AGZ37D7eL._SL1039_.jpg",
+"76561198317076000":"https://i.imgur.com/vh8IeEn.jpeg"}]],'\n','')
+
+			Back=TBL.new('https://gamepedia.cursecdn.com/mtgsalvation_gamepedia/f/f8/Magic_card_back.jpg',JSON.decode(self.script_state))
+			--BelerenFontM https://i.stack.imgur.com/787gj.png
+
     elseif a then
       --pieHere, allow using spaces instead of + when doing search syntax, also allow ( ) grouping
       local tbl={position=p.getPointerPosition(),player=p.steam_id,color=p.color,url=a:match('(http%S+)'),mode=a:gsub('(http%S+)',''):match('(%S+)'),name=a:gsub('(http%S+)',''),full=a}
@@ -1073,10 +1230,8 @@ function onChat(msg,p)
         for k,v in pairs(Importer) do
           if tbl.mode:lower()==k:lower() and type(v)=='function' then
             tbl.mode,tbl.name=k,tbl.name:lower():gsub(k:lower(),'',1)
-            break
-          end
-        end
-      end
+            break end end end
+
       if tbl.name:len()<1 then
         tbl.name='blank card'
       else
@@ -1094,13 +1249,13 @@ function onChat(msg,p)
                       ['%}']='%%7D',
                       ['%[']='%%5B',
                       ['%]']='%%5D',
-                      ['%|'] ='%%7C',
-                      ['%/'] ='%%2F',
+                      ['%|']='%%7C',
+                      ['%/']='%%2F',
                       ['\\']='%%5C',
-                      ['%^'] ='%%5E',
-                      ['%$'] ='%%24',
-                      ['%?'] ='%%3F',
-                      ['%!'] ='%%3F'}
+                      ['%^']='%%5E',
+                      ['%$']='%%24',
+                      ['%?']='%%3F',
+                      ['%!']='%%3F'}
         for char,replacement in pairs(charEncoder) do
           tbl.name=tbl.name:gsub(char,replacement)
         end
