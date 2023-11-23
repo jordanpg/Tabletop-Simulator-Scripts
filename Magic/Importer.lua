@@ -120,7 +120,7 @@ local Card = setmetatable({
                     else
                         orientation[i] = false
                     end
-                    print(i .. ' ' .. tostring(orientation[i]))
+                    -- print(i .. ' ' .. tostring(orientation[i]))
                 end
             else -- NORMAL
                 c.name = c.name:gsub('"', '') .. '\n' .. c.type_line .. '\n' .. c.cmc .. 'CMC'
@@ -318,89 +318,192 @@ function setOracle(c)
     return c.oracle_text:gsub('\"', "'") .. (n and n .. '[/b]' or '')
 end
 
-function setCard(wr, qTbl, originalData)
-    if wr.text then
-        local json = JSON.decode(wr.text)
+-- This function converts a list of the following structure:
+-- [{}, {}, {}, {}, {}]
+-- Into batches of the given size with the following example structure (batch size of 3):
+-- [[{}, {}, {}], [{}, {}]]
+-- The itemMapper parameter can also be used to map an item's structure before batching.
+function batchFromList(list, batchSize, itemMapper)
+    if batchSize == nil then batchSize = 1 end
+    if itemMapper == nil then 
+        itemMapper = function(item) return item end
+    end
+    local batches = {}
+    local currentBatch = {}
+    for i, item in ipairs(list) do
+        if #currentBatch == batchSize then
+            -- this batch is full, move onto the next batch
+            table.insert(batches, currentBatch)
+            currentBatch = {}
+        end
 
-        if json.object == 'card' then
+        if #currentBatch < batchSize then
+            -- insert the mapped item into the current batch as long as there's room
+            table.insert(currentBatch, itemMapper(item))
+        end
+    end
+    -- insert final batch
+    table.insert(batches, currentBatch)
+    return batches
+end
 
-            -- Fancy Art Series
-            if originalData and originalData.layout == 'art_series' then
-                for k in ('mana_cost type_line oracle_text colors power toughness loyalty'):gmatch('%S+') do
-                    -- if json.card_faces and json.card_faces then
-                    for i = 1, 2 do
-                        if json.card_faces and json.card_faces[i][k] then
-                            originalData.card_faces[i][k] = json.card_faces[i][k]
-                        elseif json[k] then
-                            originalData.card_faces[i][k] = json[k]
-                        end
+-- This function is for performing a batched fetch to Scryfall's /cards/collections API endpoint.
+-- If a card is not successfully found by Scryfall, the order of the results will likely be changed.
+-- 
+---@param batches table
+--- A table that is an array of arrays of identifiers. The structure of the object looks roughly like:
+--- [ [{id="bcd",name="Arcane Signet"},{id="bcd",name="Arcane Signet"},{id="xyz",name="Gamble"}], [{id="xyz",name="Gamble"},{id="fgh",name="Arcane Signet"}] ]
+--- Each batch of Scryfall IDs must have no more than 75 IDs.
+---@param callback function
+--- A function that is run as soon as the fetch is completed. This function should accept a single table
+--- parameter which is an array of tables, each table being a Scryfall card object.
+---
+function fetchBatchedScryfallCollection(batches, qTbl, callback)
+    -- we go through each batch, performing a single WebRequest for each one
+    local scryfallCards = {}
+    local wrWaits = {}      -- stores WebRequest results, waiting for all to finish
+    for i, batch in ipairs(batches) do
+        local wrWait = { done = false }
+        table.insert(wrWaits, wrWait)
+        local waitPos = #wrWaits
+        Wait.time(function()
+            -- perform custom application/json POST request
+            qTbl.text('Spawning here\nFetching batch ' .. i .. '/' .. #batches .. '...')
+            local wr = WebRequest.custom('https://api.scryfall.com/cards/collection/', 'POST', true, JSON.encode({identifiers = batch}), { ["Content-Type"] = "application/json", Accept = "application/json" }, function(res)
+                -- local text = res.text
+                -- uNotebook("Scryfall text", text)
+                -- print("Received " .. #text .. " characters from Scryfall.")
+                local resCards = JSON.decode(res.text)
+
+                if resCards.not_found ~= nil and #resCards.not_found > 0 then
+                    local fuzzyList = {}
+                    for j, notFoundCard in ipairs(resCards.not_found) do
+                        Player[qTbl.color].broadcast(
+                            "Scryfall errored trying to find " .. notFoundCard.name .. " (" .. notFoundCard.set:upper() .. ") " .. notFoundCard.collector_number:upper() .. (notFoundCard.foil and " *F*" or "") .. '!' ..
+                            "\nReplacing with a fallback print...", 
+                            {1, 0, 0}
+                        )
+                        table.insert(fuzzyList, notFoundCard)
                     end
-                end
-                for k in ('cmc type_line color_identity layout'):gmatch('%S+') do
-                    if json[k] then
-                        originalData[k] = json[k]
-                    end
-                end
-                if json.image_uris then
-                    originalData.card_faces[2].image_uris = json.image_uris
-                else
-                    originalData.card_faces[2].image_uris = json.card_faces[2].image_uris
-                end
-
-            elseif json.layout == 'art_series' then
-                WebRequrest.get('http://api.scryfall.com/cards/named?fuzzy=' .. json.card_faces[1].name,
-                    function(request)
-                        local locale_json = JSON.decode(request.text)
-                        if locale_json.object == 'error' then
-                            Card(json, qTbl)
-                        else
-                            setCard(request, qTbl, json)
-                        end
+    
+                    local fuzzyBatches = batchFromList(fuzzyList, 20, function(item) 
+                        return { name = item.name }
                     end)
 
-            -- elseif json.lang == lang then
-            else
-                Card(json, qTbl)
-            -- elseif json.lang == 'en' then
-            --     WebRequest.get('https://api.scryfall.com/cards/' .. json.set .. '/' .. json.collector_number .. '/' ..
-            --                        lang, function(request)
-            --         local locale_json = JSON.decode(request.text)
-            --         if locale_json.object == 'error' then
-            --             Card(json, qTbl)
-            --         else
-            --             setCard(request, qTbl, json)
-            --         end
-            --     end)
-            -- else
-            --     WebRequest.get('https://api.scryfall.com/cards/' .. json.set .. '/' .. json.collector_number .. '/en',
-            --         function(a)
-            --             setCard(a, qTbl, json)
-            --         end)
+                    local wrWait = { done = false }
+                    table.insert(wrWaits, wrWait)
+                    local waitPos = #wrWaits
+                    fetchBatchedScryfallCollection(fuzzyBatches, qTbl, function(fuzzyScryfallCards)
+                        for j, card in ipairs(fuzzyScryfallCards) do
+                            -- insert the fuzzy cards at the front of the card list
+                            -- so that it spawns at the top, and doesn't block a commander
+                            table.insert(scryfallCards, 1, card)
+                        end
+                        wrWait.done = true
+                    end)
+                end
+
+                -- insert all cards that returned successfully
+                for j, resCard in ipairs(resCards.data) do
+                    table.insert(scryfallCards, resCard)
+                end
+
+                wrWait.done = true
+            end)
+        end, waitPos * Tick * 2)
+    end
+
+    local waitId = nil
+    local co = coroutine.create(function()
+        -- this coroutine yields over and over again until all wrWaits announce that they're done
+        local wrWaitsDone = false
+        while not wrWaitsDone do
+            wrWaitsDone = true
+            for i, wrWait in ipairs(wrWaits) do
+                if not wrWait.done then wrWaitsDone = false end
             end
-            return
-            -- elseif originalData then
-            -- Card(json,qTbl)
-            -- pieHere: ^^^
-            -- the above bit is probably supposed to be Card(originalData,qTbl) to spawn the original foreign card instead of the error json?
-            -- replaced with a fuzzy search on the card name instead --> seems to find/get the english version after all
-        elseif originalData and originalData.name then
-            if json.object == 'error' then
-                Player[qTbl.color].broadcast("Scryfall couldn't find " .. originalData.name .. " (" .. originalData.set:upper() .. ") " .. originalData.cn:upper() .. (originalData.foil and " *F*" or ""), {1, 0, 0})
-            end
-            WebRequest.get('https://api.scryfall.com/cards/named?fuzzy=' .. originalData.name:gsub('%W', ''),
-                function(a)
-                    setCard(a, qTbl)
-                end)
-            return
-        elseif json.object == 'error' then
-            Player[qTbl.color].broadcast(json.details, {1, 0, 0})
-            endLoop()
-            return
+            coroutine.yield()
         end
+        Wait.stop(waitId)
+
+        if callback ~= nil then callback(scryfallCards) end
+    end)
+    -- this Wait will run over and over again until it is abruptly stopped by the end of the coroutine
+    waitId = Wait.time(function() coroutine.resume(co) end, 0.01, -1)
+end
+
+-- use this function if you have a WebRequest result with Scryfall card data in it
+function setCardWr(wr, qTbl, originalData)
+    if wr.text then
+        local json = JSON.decode(wr.text)
+        setCard(json, qTbl, originalData)
     else
-        error('No Data Returned Contact Amuzet. setCard')
+        error('No Data Returned Contact Amuzet. setCardWr')
     end
     endLoop()
+end
+
+-- use this function if you have decoded JSON Scryfall card data already
+function setCard(json, qTbl, originalData)
+    if json.object == 'card' then
+        -- Fancy Art Series
+        if originalData and originalData.layout == 'art_series' then
+            for k in ('mana_cost type_line oracle_text colors power toughness loyalty'):gmatch('%S+') do
+                -- if json.card_faces and json.card_faces then
+                for i = 1, 2 do
+                    if json.card_faces and json.card_faces[i][k] then
+                        originalData.card_faces[i][k] = json.card_faces[i][k]
+                    elseif json[k] then
+                        originalData.card_faces[i][k] = json[k]
+                    end
+                end
+            end
+            for k in ('cmc type_line color_identity layout'):gmatch('%S+') do
+                if json[k] then
+                    originalData[k] = json[k]
+                end
+            end
+            if json.image_uris then
+                originalData.card_faces[2].image_uris = json.image_uris
+            else
+                originalData.card_faces[2].image_uris = json.card_faces[2].image_uris
+            end
+
+        elseif json.layout == 'art_series' then
+            WebRequest.get('http://api.scryfall.com/cards/named?fuzzy=' .. json.card_faces[1].name,
+                function(request)
+                    local locale_json = JSON.decode(request.text)
+                    if locale_json.object == 'error' then
+                        Card(json, qTbl)
+                    else
+                        setCardWr(request, qTbl, json)
+                    end
+                end
+            )
+        else
+            Card(json, qTbl)
+        end
+        return
+    elseif originalData and originalData.name then
+        -- decoded card data was not a card, but does have fallback data!
+        if json.object == 'error' then
+            Player[qTbl.color].broadcast(
+                "Scryfall errored trying to find " .. originalData.name .. " (" .. originalData.set:upper() .. ") " .. originalData.cn:upper() .. (originalData.foil and " *F*" or "") .. '!' ..
+                "\nNow finding an alternative...", 
+                {1, 0, 0}
+            )
+        end
+        WebRequest.get('https://api.scryfall.com/cards/named?fuzzy=' .. originalData.name:gsub('%W', ''),
+            function(a)
+                setCardWr(a, qTbl)
+            end)
+        return
+    elseif json.object == 'error' then
+        -- decoded card data is an error object with no fallback data to work with!
+        Player[qTbl.color].broadcast(json.details, {1, 0, 0})
+        endLoop()
+        return
+    end
 end
 
 function parseForToken(oracle, qTbl)
@@ -573,7 +676,7 @@ function spawnDeck(wr, qTbl)
         for i, url in ipairs(deck) do
             Wait.time(function()
                 WebRequest.get(url, function(c)
-                    setCard(c, qTbl)
+                    setCardWr(c, qTbl)
                 end)
             end, i * Tick)
         end
@@ -614,10 +717,10 @@ function spawnDeckFromScryfall(wr, qTbl)
                 local t = JSON.decode(c.text)
                 if t.object ~= 'card' then
                     WebRequest.get('https://api.scryfall.com/cards/named?fuzzy=blankcard', function(c)
-                        setCard(c, qTbl)
+                        setCardWr(c, qTbl)
                     end)
                 else
-                    setCard(c, qTbl)
+                    setCardWr(c, qTbl)
                 end
             end)
         end, i * Tick)
@@ -672,15 +775,15 @@ function spawnCSV(wr, qTbl)
                 if t.object ~= 'card' then
                     if u:find('&') then
                         WebRequest.get(u:gsub('&.+', ''), function(c)
-                            setCard(c, qTbl)
+                            setCardWr(c, qTbl)
                         end)
                     else
                         WebRequest.get('https://api.scryfall.com/cards/named?fuzzy=blankcard', function(c)
-                            setCard(c, qTbl)
+                            setCardWr(c, qTbl)
                         end)
                     end
                 else
-                    setCard(c, qTbl)
+                    setCardWr(c, qTbl)
                 end
             end)
         end, i * Tick)
@@ -693,11 +796,13 @@ local DeckSites = {
         local deckID = urlSuffix:match("([^%s%?/$]*)")
         local url = "https://api.moxfield.com/v2/decks/all/" .. deckID .. "/"
         return url, function(wr, qTbl)
+            
+            qTbl.text('Spawning here\nFetching list from Moxfield...')
             local deckName = wr.text:match('"name":"(.-)","description"'):gsub('(\\u....)', ''):gsub('%W', '')
             local startInd = 1
             local endInd
             local keepGoing = true
-            local cards = {}
+            local moxfieldCards = {}
             n = 0
             while keepGoing do
                 n = n + 1
@@ -724,7 +829,7 @@ local DeckSites = {
                             cn = printingDat.card.cn,
                             foil = printingDat.card.foil
                         }
-                        table.insert(cards, card)
+                        table.insert(moxfieldCards, card)
                     end
                 else
                     card = {
@@ -736,30 +841,61 @@ local DeckSites = {
                         cn = cardJson.card.cn,
                         foil = cardJson.card.foil
                     }
-                    table.insert(cards, card)
+                    table.insert(moxfieldCards, card)
                 end
                 startInd = endInd + 1
             end
+
+            qTbl.text('Spawning here\nListing Moxfield results...')
             local sideboard = ''
             qTbl.deck = 0
-            for i, card in ipairs(cards) do
+            local list = {}
+            local mapIdToOriginalData = {}
+            for i, card in ipairs(moxfieldCards) do
                 if card.boardType == 'sideboard' or card.boardType == 'maybeboard' then
+                    -- set aside sideboard and maybeboard cards
                     sideboard = sideboard .. card.quantity .. ' ' .. card.name .. '\n'
                 elseif card.boardType == 'mainboard' or card.boardType == 'commanders' or card.boardType == 'companions' then
                     for i = 1, card.quantity do
+                        table.insert(list, card)
+                        -- hold on to a map of Scryfall IDs to Moxfield results for later
+                        mapIdToOriginalData[card.scryfall_id] = card
                         qTbl.deck = qTbl.deck + 1
-                        Wait.time(function()
-                            WebRequest.get('https://api.scryfall.com/cards/' .. card.scryfall_id, function(c)
-                                setCard(c, qTbl, card)
-                            end)
-                        end, qTbl.deck * Tick * 2)
                     end
                 end
             end
+
+            qTbl.text('Spawning here\nBatching Moxfield results...')
+            local batches = batchFromList(list, 20, function(item) 
+                return { 
+                    id = item.scryfall_id, 
+                    name = item.name, 
+                    set = item.set, 
+                    collector_number = item.cn, 
+                    foil = item.foil 
+                }
+            end)
+
+            qTbl.text('Spawning here\nFetching cards from Scryfall...')
+            -- fetch the complete scryfall collection using the batches of ids
+            fetchBatchedScryfallCollection(batches, qTbl, function(scryfallCards)
+                local waitId = nil
+                local done = false
+                local co = coroutine.create(function() 
+                    -- load each scryfall card into the game, yielding for each card
+                    for i, card in ipairs(scryfallCards) do
+                        setCard(card, qTbl, mapIdToOriginalData[card.id])
+                        coroutine.yield()
+                    end
+                    Wait.stop(waitId)
+                    done = true
+                end)
+                waitId = Wait.time(function() coroutine.resume(co) end, 0.01, -1)
+            end)
+
             if sideboard ~= '' then
-                Player[qTbl.color].broadcast(deckName ..
-                                                 ' Sideboard and Maybeboard in notebook.\nType "Scryfall deck" to spawn it now.')
-                uNotebook(deckName, sideboard)
+                Player[qTbl.color].broadcast(deckName .. ' Sideboard and Maybeboard in notebook.\nType "Scryfall deck" to spawn it now.')
+                uNotebook(deckName .. " SBs and Maybes", sideboard)
             end
         end
     end,
@@ -823,7 +959,7 @@ local DeckSites = {
                     qTbl.deck = qTbl.deck + 1
                     Wait.time(function()
                         WebRequest.get('https://api.scryfall.com/cards/' .. v.card.uid, function(c)
-                            setCard(c, qTbl)
+                            setCardWr(c, qTbl)
                         end)
                     end, qTbl.deck * Tick * 2)
                 end
@@ -858,7 +994,7 @@ local DeckSites = {
                     end
                     Wait.time(function()
                         WebRequest.get(b, function(c)
-                            setCard(c, qTbl)
+                            setCardWr(c, qTbl)
                         end)
                     end, c * Tick)
                 end
@@ -1216,7 +1352,7 @@ function spawnPack(qTbl, pack)
     qTbl.deck = #pack
     qTbl.mode = 'Deck'
     log(pack)
-    -- TODO: prevent dups, divert to a seperate function before setCard()
+    -- TODO: prevent dups, divert to a seperate function before setCardWr()
     for i, u in pairs(pack) do
         Wait.time(function()
             WebRequest.get(u, function(wr)
@@ -1224,7 +1360,7 @@ function spawnPack(qTbl, pack)
                     log(u)
                 end
                 -- Divert here
-                setCard(wr, qTbl)
+                setCardWr(wr, qTbl)
             end)
         end, i * Tick)
     end
@@ -1262,7 +1398,7 @@ Importer = setmetatable({
                 end)
                 return false
             else
-                setCard(wr, qTbl)
+                setCardWr(wr, qTbl)
             end
         end)
     end,
@@ -1275,7 +1411,7 @@ Importer = setmetatable({
                 for _, v in ipairs(json.all_parts) do
                     if json.name ~= v.name then
                         WebRequest.get(v.uri, function(wr)
-                            setCard(wr, qTbl)
+                            setCardWr(wr, qTbl)
                         end)
                     end
                 end
@@ -1451,7 +1587,7 @@ Importer = setmetatable({
         for i, u in pairs(t) do
             Wait.time(function()
                 WebRequest.get(u, function(wr)
-                    setCard(wr, qTbl)
+                    setCardWr(wr, qTbl)
                 end)
             end, i * Tick)
         end
@@ -1542,13 +1678,13 @@ Importer = setmetatable({
             for i = 1, n do
                 Wait.time(function()
                     WebRequest.get(url, function(wr)
-                        setCard(wr, qTbl)
+                        setCardWr(wr, qTbl)
                     end)
                 end, i * Tick)
             end
         else
             WebRequest.get(url, function(wr)
-                setCard(wr, qTbl)
+                setCardWr(wr, qTbl)
             end)
         end
     end,
