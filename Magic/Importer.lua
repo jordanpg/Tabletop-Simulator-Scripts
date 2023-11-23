@@ -358,7 +358,8 @@ end
 --- A function that is run as soon as the fetch is completed. This function should accept a single table
 --- parameter which is an array of tables, each table being a Scryfall card object.
 ---
-function fetchBatchedScryfallCollection(batches, qTbl, callback)
+function fetchBatchedScryfallCollection(batches, qTbl, callback, isFallbackBatches)
+    if isFallbackBatches == null then isFallbackBatches = false end
     -- we go through each batch, performing a single WebRequest for each one
     local scryfallCards = {}
     local wrWaits = {}      -- stores WebRequest results, waiting for all to finish
@@ -368,7 +369,7 @@ function fetchBatchedScryfallCollection(batches, qTbl, callback)
         local waitPos = #wrWaits
         Wait.time(function()
             -- perform custom application/json POST request
-            qTbl.text('Spawning here\nFetching batch ' .. i .. '/' .. #batches .. '...')
+            qTbl.text('Spawning here\nFetching ' .. (isFallbackBatches and 'fallback ' or '') .. 'batch ' .. i .. '/' .. #batches .. '...')
             local wr = WebRequest.custom('https://api.scryfall.com/cards/collection/', 'POST', true, JSON.encode({identifiers = batch}), { ["Content-Type"] = "application/json", Accept = "application/json" }, function(res)
                 -- local text = res.text
                 -- uNotebook("Scryfall text", text)
@@ -380,7 +381,7 @@ function fetchBatchedScryfallCollection(batches, qTbl, callback)
                     for j, notFoundCard in ipairs(resCards.not_found) do
                         Player[qTbl.color].broadcast(
                             "Scryfall errored trying to find " .. notFoundCard.name .. " (" .. notFoundCard.set:upper() .. ") " .. notFoundCard.collector_number:upper() .. (notFoundCard.foil and " *F*" or "") .. '!' ..
-                            "\nReplacing with a fallback print...", 
+                            "\nWill batch a fallback print...", 
                             {1, 0, 0}
                         )
                         table.insert(fuzzyList, notFoundCard)
@@ -400,7 +401,7 @@ function fetchBatchedScryfallCollection(batches, qTbl, callback)
                             table.insert(scryfallCards, 1, card)
                         end
                         wrWait.done = true
-                    end)
+                    end, true)
                 end
 
                 -- insert all cards that returned successfully
