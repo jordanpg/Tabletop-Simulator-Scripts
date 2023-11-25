@@ -3,7 +3,7 @@ by ototperks
 Adds some buttons to help with calculations during combat
 ]] pID = "Calculator_Module"
 UPDATE_URL = 'https://raw.githubusercontent.com/jordanpg/Tabletop-Simulator-Scripts/master/Magic/CalculatorModule.lua'
-version = '1.0.0'
+version = '1.1.0'
 Style = {}
 UiId = "calculator-buttons"
 Ui = {
@@ -87,12 +87,16 @@ function uiCalculateCombat(player)
     if result == nil then
         return
     end
-    broadcastToColor(string.format("[FF4242]Power[-]:            %d\n[6A8EAE]Toughness[-]:     %d", result.power, result.toughness), player.color, { r=255, g=255, b=255 })
+    local powerLine = string.format("[FF4242]Power[-]: %d", result.power + result.fs)
+    if result.fs > 0 then
+        powerLine = powerLine .. string.format(" (%d first/%d)", result.fs, result.power)
+    end
+    broadcastToColor(string.format("%s\n[6A8EAE]Toughness[-]: %d", powerLine, result.toughness), player.color, { r=255, g=255, b=255 })
 end
 
 function getSelectedPT(player)
     local selections = player.getSelectedObjects()
-    local result = { power=0, toughness=0 }
+    local result = { power=0, toughness=0, fs=0 }
 
     if selections == nil or #selections == 0 then
         return nil
@@ -113,18 +117,25 @@ function getSelectedPT(player)
                 local ourPower = (tonumber(data.cardFaces[data.activeFace].basePower or "0") or 0)
                     + data.power
                     + data.plusOneCounters
+                local ourFSPower = 0
                 local ourToughness = (tonumber(data.cardFaces[data.activeFace].baseToughness or "0") or 0)
                     + data.toughness
                     + data.plusOneCounters
                 -- Find keywords that will affect P/T
                 local kws = data.cardFaces[data.activeFace].keywords or {}
                 for i, v in ipairs(kws) do
+                    -- Handle first strike damage
                     if v:find("ouble strike") then
-                        ourPower = ourPower * 2
+                        ourFSPower = ourFSPower + ourPower
+                    elseif v:find("irst strike") then
+                        -- For first strike, we only have FS damage, so set regular power to 0
+                        ourFSPower = ourPower
+                        ourPower = 0
                     end
                 end
                 -- Add to sum
                 result.power = result.power + ourPower
+                result.fs = result.fs + ourFSPower
                 result.toughness = result.toughness + ourToughness
             end
         end
