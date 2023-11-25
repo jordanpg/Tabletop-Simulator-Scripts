@@ -3,7 +3,7 @@ by ototperks
 Adds some buttons to help with calculations during combat
 ]] pID = "Calculator_Module"
 UPDATE_URL = 'https://raw.githubusercontent.com/jordanpg/Tabletop-Simulator-Scripts/master/Magic/CalculatorModule.lua'
-version = '1.1.0'
+version = '1.2.0'
 Style = {}
 UiId = "calculator-buttons"
 Ui = {
@@ -34,7 +34,7 @@ Ui = {
         attributes = {
             icon = "CombatIcon",
             onClick = self.guid .. "/uiCalculateCombat",
-            tooltip = "Calculate Total Power/Toughness"
+            tooltip = "Calculate Combat"
         },
         children = {},
         tag = "Button"
@@ -82,21 +82,43 @@ function addGlobalUi()
 end
 
 function uiCalculateCombat(player)
-    log(player.steam_name)
-    local result = getSelectedPT(player)
+    local result = calculateCombat(player)
     if result == nil then
         return
     end
-    local powerLine = string.format("[FF4242]Power[-]: %d", result.power + result.fs)
-    if result.fs > 0 then
-        powerLine = powerLine .. string.format(" (%d first/%d)", result.fs, result.power)
+
+    local sumPower = result.power + result.fs + result.last
+    
+    if result.fs > 0 or result.last > 0 then
+        player.broadcast(string.format("[909CC2]Phases[-]: first %d | %d%s", result.fs, result.power, result.last > 0 and string.format(" | %d last", result.last) or ""))
     end
-    broadcastToColor(string.format("%s\n[6A8EAE]Toughness[-]: %d", powerLine, result.toughness), player.color, { r=255, g=255, b=255 })
+    
+    if result.lifelink > 0 then
+        player.broadcast(string.format("[F7F5FB]Lifelink[-]: %d", result.lifelink))
+    end
+    
+    if result.reach.power > 0 or result.reach.toughness > 0 then
+        player.broadcast(string.format("[04724D]Reach[-]: %d power / %d toughness", result.reach.power, result.reach.toughness))
+    end
+    if result.flying.power > 0 or result.flying.toughness > 0 then
+        player.broadcast(string.format("[CDE6F5]Flying[-]: %d power / %d toughness", result.flying.power, result.flying.toughness))
+    end
+
+    player.broadcast(string.format("[084887]Toughness[-]: %d", result.toughness))
+    player.broadcast(string.format("[F58A07]Power[-]: %d", sumPower))
 end
 
-function getSelectedPT(player)
+function calculateCombat(player)
     local selections = player.getSelectedObjects()
-    local result = { power=0, toughness=0, fs=0 }
+    local result = {
+        power = 0,
+        toughness = 0,
+        fs = 0,
+        last = 0,
+        lifelink = 0,
+        reach = { power = 0, toughness = 0 },
+        flying = { power = 0, toughness = 0 }
+    }
 
     if selections == nil or #selections == 0 then
         return nil
@@ -113,16 +135,22 @@ function getSelectedPT(player)
                 })
                 local data = encData["tyrantUnified"]
                 Notes.addNotebookTab({ title="data_" .. t.getGUID(), body=JSON.encode_pretty(data) })
-                -- Get base P/T plus +1/+1 counters and any manual modifications
+                
+                -- Set up variables, pull from data
                 local ourPower = (tonumber(data.cardFaces[data.activeFace].basePower or "0") or 0)
                     + data.power
                     + data.plusOneCounters
                 local ourFSPower = 0
+                local ourLSPower = 0
                 local ourToughness = (tonumber(data.cardFaces[data.activeFace].baseToughness or "0") or 0)
                     + data.toughness
                     + data.plusOneCounters
-                -- Find keywords that will affect P/T
+                local lifelink = false
+                local reach = false
+                local flying = false
                 local kws = data.cardFaces[data.activeFace].keywords or {}
+                
+                -- Find notable keywords
                 for i, v in ipairs(kws) do
                     -- Handle first strike damage
                     if v:find("ouble strike") then
@@ -132,11 +160,43 @@ function getSelectedPT(player)
                         ourFSPower = ourPower
                         ourPower = 0
                     end
+                    
+                    -- Handle last strike damage
+                    if v:find("riple strike") then
+                        ourFSPower = ourFSPower + ourPower
+                        ourLSPower = ourLSPower + ourPower
+                    elseif v:find("ast strike") then
+                        ourLSPower = ourPower
+                        ourPower = 0
+                    end
+
+                    -- Lifelink
+                    if v:find("ifelink") then
+                        lifelink = true
+                    end
+
+                    -- Reach
+                    if v:find("Reach") then
+                        reach = true
+                    end
+
+                    -- Flying
+                    if v:find("lying") then
+                        flying = true
+                    end
                 end
-                -- Add to sum
+
+                -- Add to result
+                local sumPower = ourPower + ourFSPower + ourLSPower
                 result.power = result.power + ourPower
                 result.fs = result.fs + ourFSPower
+                result.last = result.last + ourLSPower
                 result.toughness = result.toughness + ourToughness
+                result.lifelink = result.lifelink + (lifelink and sumPower or 0)
+                result.reach.power = result.reach.power + (reach and sumPower or 0)
+                result.reach.toughness = result.reach.toughness + (reach and ourToughness or 0)
+                result.flying.power = result.flying.power + (flying and sumPower or 0)
+                result.flying.toughness = result.flying.toughness + (flying and ourToughness or 0)
             end
         end
     end
