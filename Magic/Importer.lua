@@ -1,5 +1,5 @@
 -- By Amuzet
-mod_name,version='Card Importer',2.000
+mod_name,version='Card Importer',2.001
 self.setName('[854FD9]' .. mod_name .. ' [49D54F]' .. version)
 author, WorkshopID, GITURL = '76561198045776458', 'https://steamcommunity.com/sharedfiles/filedetails/?id=1838051922',
     'https://raw.githubusercontent.com/jordanpg/Tabletop-Simulator-Scripts/master/Magic/Importer.lua'
